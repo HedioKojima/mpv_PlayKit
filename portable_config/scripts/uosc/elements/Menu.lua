@@ -65,6 +65,7 @@ function Menu:close(immediate, callback)
 		end
 
 		local function close()
+			local current_id = menu.current and menu.current.id -- 增加层级记忆
 			local on_close = menu.root.on_close -- removed in menu:destroy()
 			Elements:remove('menu') -- calls menu:destroy() under the hood
 			Elements:update_proximities()
@@ -74,7 +75,7 @@ function Menu:close(immediate, callback)
 			if callback then callback() end
 
 			-- Call callbacks/events defined on menu config
-			local close_event = {type = 'close'}
+			local close_event = {type = 'close', menu_id = current_id} -- 增加层级记忆
 			if not on_close or menu:command_or_event(on_close, {}, close_event) ~= 'event' then
 				menu.callback(close_event)
 			end
@@ -146,7 +147,17 @@ function Menu:init(data, callback, opts)
 
 	self:tween_property('opacity', 0, 1)
 	self:enable_key_bindings()
-	Elements:maybe('curtain', 'register', self.id)
+	if data.curtain ~= false then
+		Elements:maybe('curtain', 'register', self.id)
+	else
+		-- 替换了带 curtain 的菜单时，旧菜单因 is_being_replaced 跳过了 unregister
+		-- 需要在此处清空 curtain 的 dependents 使其正确消失
+		local curtain = Elements.curtain
+		if curtain and #curtain.dependents > 0 then
+			curtain.dependents = {}
+			curtain:tween_property('opacity', curtain.opacity, 0)
+		end
+	end
 
 	if data.search_submit then
 		-- We have to defer this so that menu callbacks don't fire before the menu
@@ -347,6 +358,9 @@ function Menu:update_dimensions()
 			self.scroll_step + self.separator_size + 1 or 0
 		local footnote_height = self.font_size * 1.5
 		local max_height = height_available - title_height - footnote_height
+		if menu.max_items and menu.max_items > 0 then -- 限制显示项数
+			max_height = math.min(max_height, self.scroll_step * menu.max_items - self.item_spacing)
+		end
 		local content_height = self.scroll_step * #menu.items
 		menu.height = math.min(content_height - self.item_spacing, max_height)
 		menu.top = clamp(

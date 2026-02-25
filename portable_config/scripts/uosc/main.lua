@@ -6,7 +6,7 @@ COMMIT_ 99510d50b89e3724b6115d9ef06731e97a50b7cf
 极简主义设计驱动的多功能界面脚本群组，兼容 thumbfast 新缩略图引擎
 ]]
 
-local uosc_version = '5.12.0'
+local uosc_version = '5.12.1'
 
 mp.commandv('script-message', 'uosc-version', uosc_version)
 
