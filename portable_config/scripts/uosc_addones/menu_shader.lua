@@ -1,97 +1,16 @@
 --[[
 
-文档_ uosc_menu_shader.conf
-
-简化与增强复数项的着色器的调用体验，需要安装脚本 uosc 作为前置依赖。
-
-可用的快捷键示例（在 input.conf 中写入）：
- <KEY>   script-message uosc-menu-shader        # 打开着色器扩展菜单
- <KEY>   script-message uosc-menu-shader root   # 始终从根目录打开
+用户着色器扩展菜单 — uosc_addones 子模块
 
 ]]
 
 
-local options = require("mp.options")
-local utils = require("mp.utils")
-local msg = require("mp.msg")
-
-local opts = {
-	load = true,
-
-	shader_dir    = "~~/shaders/",
-	shader_exts   = "*,glsl,hook",
-	action_prefer = "set",
-	preset_save   = "session",
-	cache_dir     = "~~/",
-}
-options.read_options(opts, nil)
-
--- ============================================================================
--- ============================================================================
-
-if opts.load == false then
-	mp.msg.info("脚本已被初始化禁用")
-	return
-end
--- 原因：首个将gpu-next作为首选vo的版本
-local min_major = 0
-local min_minor = 41
-local min_patch = 0
-local mpv_ver_curr = mp.get_property_native("mpv-version", "unknown")
-local function incompat_check(full_str, tar_major, tar_minor, tar_patch)
-	if full_str == "unknown" then
-		return true
-	end
-
-	local clean_ver_str = full_str:gsub("^[^%d]*", "")
-	local major, minor, patch = clean_ver_str:match("^(%d+)%.(%d+)%.(%d+)")
-	major = tonumber(major)
-	minor = tonumber(minor)
-	patch = tonumber(patch or 0)
-	if major < tar_major then
-		return true
-	elseif major == tar_major then
-		if minor < tar_minor then
-			return true
-		elseif minor == tar_minor then
-			if patch < tar_patch then
-				return true
-			end
-		end
-	end
-
-	return false
-end
-if incompat_check(mpv_ver_curr, min_major, min_minor, min_patch) then
-	mp.msg.warn("当前mpv版本 (" .. (mpv_ver_curr or "未知") .. ") 低于 " .. min_major .. "." .. min_minor .. "." .. min_patch .. "，已终止脚本。")
-	return
-end
-
--- uosc 版本检查
-local uosc_min_major = 5
-local uosc_min_minor = 12
-local uosc_min_patch = 1
-local uosc_ready = false
-local init
-mp.register_script_message("uosc-version", function(version)
-	if uosc_ready then return end
-	if incompat_check(version, uosc_min_major, uosc_min_minor, uosc_min_patch) then
-		mp.msg.warn("uosc版本 (" .. version .. ") 低于 " .. uosc_min_major .. "." .. uosc_min_minor .. "." .. uosc_min_patch .. "，已终止脚本。")
-		return
-	end
-	uosc_ready = true
-	init()
-end)
-
--- ============================================================================
--- ============================================================================
-
-local script_name = mp.get_script_name()
 local shader_base_path = ""
 local use_relative_paths = false
 local mounted_shaders = {}
 local menu_type = "k7shader"
 local last_submenu_id = nil
+local initialized = false
 
 local presets = {
 	{str = "", list = {}},
@@ -126,33 +45,6 @@ end
 
 -- ============================================================================
 -- ============================================================================
-
-local function normalize_path(p)
-	if not p then return "" end
-	return p:gsub("\\", "/"):gsub("/+", "/")
-end
-
-local function path_key(p)
-	return normalize_path(p):lower()
-end
-
-local function get_extension(filename)
-	return filename:match("%.([^%.]+)$")
-end
-
-local function strip_extension(filename)
-	return filename:match("^(.+)%.[^%.]+$") or filename
-end
-
-local function join(base, child)
-	return utils.join_path(base, child)
-end
-
-local function sort_entries(entries)
-	table.sort(entries, function(a, b)
-		return a:lower() < b:lower()
-	end)
-end
 
 local function should_include_file(filename)
 	if next(shader_extensions) == nil and not allow_no_ext then
@@ -222,7 +114,7 @@ end
 local PRESETS_FILENAME = "saved-glsl-list.json"
 
 local function get_presets_filepath()
-	local dir = opts.cache_dir
+	local dir = opts.shader_cache_dir
 	local expanded = mp.command_native({"expand-path", dir}) or dir
 	return utils.join_path(expanded, PRESETS_FILENAME)
 end
@@ -275,7 +167,7 @@ local function save_preset(index)
 	presets[index].str = mp.get_property("glsl-shaders", "")
 	local list = mp.get_property_native("glsl-shaders", {})
 	presets[index].list = (type(list) == "table") and list or {}
-	if opts.preset_save == "persist" then save_presets_to_file() end
+	if opts.shader_preset_save == "persist" then save_presets_to_file() end
 end
 
 local function preset_is_empty(index)
@@ -308,7 +200,7 @@ end
 local function build_preset_actions(index)
 	return {
 		{name = "info",  icon = "info",         label = preset_label(index)},
-		{name = "save",  icon = "save",         label = "保存当前着色器队列到预设"},
+		{name = "save",  icon = "save",         label = "保存当前用户着色器队列到预设"},
 		{name = "copy",  icon = "content_copy", label = "复制该预设到剪贴板"},
 		{name = "clear", icon = "clear_all",    label = "重置预设"},
 	}
@@ -317,7 +209,7 @@ end
 local function build_preset_items()
 	local items = {}
 	items[#items + 1] = {
-		title = "清空当前着色器队列",
+		title = "清空当前用户着色器队列",
 		icon = "delete_sweep",
 		value = "clr",
 		bold = true,
@@ -410,11 +302,11 @@ local function build_menu_data()
 
 	return {
 		type = menu_type,
-		title = "着色器扩展菜单",
+		title = "用户着色器扩展菜单",
 		keep_open = true,
 		curtain = false,
 		max_items = 15,
-		callback = {script_name, "menu-event"},
+		callback = {script_name, "shader-menu-event"},
 		item_actions = shader_item_actions,
 		item_actions_place = "outside",
 		items = items,
@@ -467,14 +359,14 @@ local function preset_action(index, action)
 		end
 	elseif action == "clear" then
 		presets[index] = {str = "", list = {}}
-		if opts.preset_save == "persist" then save_presets_to_file() end
+		if opts.shader_preset_save == "persist" then save_presets_to_file() end
 		-- msg.info("清空配置 " .. index)
 		-- mp.commandv("show-text", "配置 " .. index .. " 已清空", 2000)
 	else
 		mp.commandv("change-list", "glsl-shaders", "set", presets[index].str)
 		-- msg.info("应用配置 " .. index .. " (" .. #presets[index].list .. " 项)")
 		-- mp.commandv("show-text", "已应用配置 " .. index, 2000)
-		mp.command('show-text "应用着色器队列: \n${glsl-shaders}"')
+		mp.command('show-text "应用用户着色器队列: \n${glsl-shaders}"')
 	end
 end
 
@@ -495,7 +387,8 @@ local function open_shader_menu()
 	mp.commandv("script-message-to", "uosc", "open-menu", json, last_submenu_id or "")
 end
 
-mp.register_script_message("menu-event", function(json)
+function handle_shader_menu_event(json)
+	if not initialized then return end
 	local event = utils.parse_json(json)
 	if not event then return end
 
@@ -507,13 +400,13 @@ mp.register_script_message("menu-event", function(json)
 
 		local preset_index = value:match("^preset:(%d+)$")
 		if value == "clr" then
-			mp.commandv("change-list", "glsl-shaders", "clr", "")
-			msg.info("清空全部着色器")
+			mp.command("change-list glsl-shaders clr \"\"")
+			msg.info("清空全部用户着色器")
 		elseif preset_index then
 			preset_index = tonumber(preset_index)
 			preset_action(preset_index, event.action)
 		else
-			local action = event.action or opts.action_prefer
+			local action = event.action or opts.shader_action_prefer
 			shader_action(value, action)
 		end
 		mp.add_timeout(0.05, update_menu)
@@ -528,15 +421,18 @@ mp.register_script_message("menu-event", function(json)
 			last_submenu_id = nil
 		end
 	end
-end)
+end
 
-mp.register_script_message("uosc-menu-shader", function(mode)
-	if not uosc_ready then return end
+function handle_uosc_menu_shader(mode)
+	if not initialized then return end
 	if mode == "root" then last_submenu_id = nil end
 	open_shader_menu()
-end)
+end
 
-init = function()
+-- ============================================================================
+-- ============================================================================
+
+function shader_menu_init()
 	parse_extensions()
 	local dir = opts.shader_dir
 	local norm_dir = normalize_path(dir)
@@ -553,15 +449,17 @@ init = function()
 		shader_base_path = dir
 	end
 
-	-- msg.info("着色器目录: " .. shader_base_path)
+	-- msg.info("用户着色器目录: " .. shader_base_path)
 	-- msg.info("路径模式: " .. (use_relative_paths and "相对路径 (~~)" or "绝对路径"))
 
-	if opts.preset_save == "persist" then
+	if opts.shader_preset_save == "persist" then
 		load_presets_from_file()
 	end
 
 	local info = utils.file_info(shader_base_path)
 	if not info or not info.is_dir then
-		msg.warn("着色器目录不存在: " .. shader_base_path)
+		msg.warn("用户着色器目录不存在: " .. shader_base_path)
 	end
+
+	initialized = true
 end
