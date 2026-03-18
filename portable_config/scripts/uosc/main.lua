@@ -3,7 +3,7 @@ SOURCE_ https://github.com/tomasklaen/uosc/tree/main/src/uosc
 COMMIT_ 99510d50b89e3724b6115d9ef06731e97a50b7cf
 文档_ https://github.com/hooke007/mpv_PlayKit/discussions/186
 
-极简主义设计驱动的多功能界面脚本群组，兼容 thumbfast 新缩略图引擎
+极简主义设计驱动的多功能界面脚本群组，可支持 thumb_engine 或 thumbfast 缩略图引擎
 ]]
 
 local uosc_version = '5.12.1'
@@ -106,7 +106,7 @@ defaults = {
 	adjust_osd_margins = false,
 	chapter_ranges = 'openings:30abf964,endings:30abf964,ads:c54e4e80',
 	chapter_range_patterns = 'openings:オープニング;endings:エンディング',
-	languages = 'slang,en',                   -- https://opensubtitles.stoplight.io/docs/opensubtitles-api/1de776d20e873-languages
+	languages = 'slang,en',   -- https://opensubtitles.stoplight.io/docs/opensubtitles-api/1de776d20e873-languages
 	disable_elements = '',
 	subtitles_directory = '~~/_cache/usubs',
 	idlescreen = true,
@@ -114,6 +114,9 @@ defaults = {
 	idle_call_menu = 0,
 	custom_font = 'default',
 	ziggy_pth = 'default',
+
+	thumbnail_provider = 'thumb_engine',
+	thumbnail_mode = "natural",
 }
 options = table_copy(defaults)
 function handle_options(changed_options)
@@ -745,7 +748,7 @@ mp.observe_property('window-maximized', 'bool', create_state_setter('maximized',
 mp.observe_property('idle-active', 'bool', function(_, idle)
 	set_state('is_idle', idle)
 	Elements:trigger('dispositions')
-	mp.commandv('script-message-to', 'thumbfast', 'clear')
+	mp.commandv('script-message-to', options.thumbnail_provider, 'clear')
 end)
 mp.observe_property('pause', 'bool', create_state_setter('pause', function() file_end_timer:kill() end))
 mp.observe_property('volume', 'number', create_state_setter('volume'))
@@ -1170,11 +1173,11 @@ mp.register_script_message('menu-action', function(name, ...)
 		if method then menu[method](menu, ...) end
 	end
 end)
-mp.register_script_message('thumbfast-info', function(json)
+mp.register_script_message(options.thumbnail_provider .. '-info', function(json)
 	local data = utils.parse_json(json)
 	if type(data) ~= 'table' or not data.width or not data.height then
 		thumbnail.disabled = true
-		msg.error('thumbfast-info: received json didn\'t produce a table with thumbnail information')
+		msg.error(options.thumbnail_provider .. '-info: received json didn\'t produce a table with thumbnail information')
 	else
 		thumbnail = data
 		request_render()
