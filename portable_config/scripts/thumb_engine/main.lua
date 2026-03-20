@@ -32,6 +32,7 @@ local options = {
 
 	max_height = 320,
 	max_width = 320,
+	rescale = 0,
 	overlay_id = 42,
 
 	spawn_first = false,

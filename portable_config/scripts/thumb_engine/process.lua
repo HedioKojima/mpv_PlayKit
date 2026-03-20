@@ -143,9 +143,6 @@ local function spawn_mpv(time)
 
 	local open_filename = state.properties["stream-open-filename"]
 	local ytdl = open_filename and state.properties["demuxer-via-network"] and path ~= open_filename
-	if ytdl then
-		path = open_filename
-	end
 
 	state.remove_thumbnail_files()
 
@@ -153,28 +150,34 @@ local function spawn_mpv(time)
 	state.has_vid = vid or 0
 
 	local args = {
-		mpv_path, "--config=no", "--terminal=no", "--msg-level=all=no", "--idle=yes", "--keep-open=always",
+		mpv_path, "--config=no",
+		"--terminal=no", "--msg-level=all=no", "--idle=yes", "--keep-open=always",
 		"--pause=yes", "--ao=null",
-		"--osc=no", "--load-stats-overlay=no", "load-console=no", "load-commands=no", "--load-auto-profiles=no", "--load-select=no", "--load-positioning=no",
+		"--osc=no", "--load-stats-overlay=no", "--load-console=no", "--load-commands=no", "--load-auto-profiles=no",
+		"--load-select=no", "--load-context-menu=no", "--load-positioning=no",
 		"--clipboard-backends-clr", "--video-osd=no", "--autoload-files=no",
 		"--vd-lavc-skiploopfilter=all", "--vd-lavc-skipidct=all", "--vd-lavc-fast", "--vd-lavc-threads="..options.sw_threads, "--hwdec="..options.hwdec,
 		"--edition="..(state.properties["edition"] or "auto"), "--vid="..(vid or "auto"), "--sub=no", "--audio=no",
 		"--start="..time,
 		"--dither-depth=no", "--tone-mapping=hable",
 		"--audio-pitch-correction=no", "--deinterlace=no",
-		"--ytdl-format=worst", "--demuxer-readahead-secs=0", "--demuxer-max-bytes=128KiB",
-		"--vf="..vf_gen(), "--ovc=rawvideo", "--of=image2", "--ofopts=update=1", "--ocopy-metadata=no", "--o="..options.tnpath
+		"--ytdl="..(ytdl and "yes" or "no"), "--ytdl-format=worstvideo/worst",
+		"--vf="..vf_gen(), "--ovc=rawvideo", "--of=image2", "--ofopts=update=1", "--ocopy-metadata=no", "--o="..options.tnpath,
+		"--input-media-keys=no"
 	}
+
+	if not ytdl then
+		table.insert(args, "--demuxer-max-bytes=128KiB")
+		table.insert(args, "--demuxer-readahead-secs=0")
+	end
 
 	if os_name == "darwin" then
 		table.insert(args, "--macos-app-activation-policy=prohibited")
-		table.insert(args, "--input-media-keys=no")
 	end
 
 	if os_name == "windows" then
 		table.insert(args, "--media-controls=no")
 		table.insert(args, "--input-ipc-server="..options.socket)
-		table.insert(args, "--input-media-keys=no")
 	elseif not state.script_written then
 		local client_script_path = options.socket..".run"
 		local script = io.open(client_script_path, "w+")
@@ -193,6 +196,7 @@ local function spawn_mpv(time)
 		table.insert(args, "--scripts="..client_script_path)
 	end
 
+	table.insert(args, "--")
 	table.insert(args, path)
 
 	state.spawned = true
@@ -220,6 +224,15 @@ local function spawn_ffmpeg(time)
 	local path = state.properties["path"]
 	if path == nil then return end
 
+	-- TODO: ffmpeg后端暂不支持流媒体；清空状态并返回
+	if state.properties["demuxer-via-network"] then
+		cache_clear()
+		ffmpeg_src_path = nil
+		state.spawned = false
+		state.spawn_working = false
+		return
+	end
+
 	if options.quit_after_inactivity > 0 then
 		if state.show_thumbnail or state.activity_timer:is_enabled() then
 			state.activity_timer:kill()
@@ -227,15 +240,10 @@ local function spawn_ffmpeg(time)
 		state.activity_timer:resume()
 	end
 
-	local open_filename = state.properties["stream-open-filename"]
-	local ytdl = open_filename and state.properties["demuxer-via-network"] and path ~= open_filename
-	if ytdl then
-		path = open_filename
-	end
-
-	-- 记录源路径供后续 seek 使用（新文件时清空缓存）
+	-- 记录源路径供后续 seek 使用（新文件时清空内存和旧缩略图缓存）
 	if ffmpeg_src_path ~= path then
 		cache_clear()
+		state.remove_thumbnail_files()
 	end
 	ffmpeg_src_path = path
 	state.spawned = true
@@ -392,8 +400,11 @@ local function prefill_worker()
 
 	-- 队列耗尽或被中断
 	prefill_workers = prefill_workers - 1
-	if prefill_workers <= 0 and #prefill_queue == 0 and prefill_src_path then
-		mp.msg.info("cache prefill done (" .. #cache_order .. "/" .. options.cache_max .. ")")
+	if prefill_workers <= 0 then
+		prefill_workers = 0
+		if #prefill_queue == 0 and prefill_src_path then
+			mp.msg.info("cache prefill done (" .. #cache_order .. "/" .. options.cache_max .. ")")
+		end
 	end
 end
 

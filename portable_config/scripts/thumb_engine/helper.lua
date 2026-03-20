@@ -48,13 +48,8 @@ function M.calc_dimensions(state, options)
 	local width = state.properties["video-params"] and state.properties["video-params"]["w"]
 	local height = state.properties["video-params"] and state.properties["video-params"]["h"]
 	if not width or not height then return end
-
-	local scale
-	if state.properties["hidpi-window-scale"] then
-		scale = state.properties["display-hidpi-scale"] or 1
-	else
-		scale = M.auto_ui_scale() or 1
-	end
+	local auto_scale = tonumber(options.rescale) or 1
+	local scale = auto_scale == 0 and (M.auto_ui_scale() or 1) or math.max(auto_scale, 1)
 
 	if width / height > options.max_width / options.max_height then
 		state.effective_w = math.floor(options.max_width * scale + 0.5)
