@@ -275,11 +275,16 @@ local function thumb(time, r_x, r_y, script)
 		state.x, state.y = math.floor(r_x + 0.5), math.floor(r_y + 0.5)
 	end
 
+	local was_showing = state.show_thumbnail
+
 	state.script_name = script
 	if state.last_x ~= state.x or state.last_y ~= state.y or not state.show_thumbnail then
 		state.show_thumbnail = true
 		state.last_x, state.last_y = state.x, state.y
-		draw(state.real_w, state.real_h, script)
+		-- 从清除状态恢复时不绘制过期的旧缩略图，等待新帧生成
+		if was_showing then
+			draw(state.real_w, state.real_h, script)
+		end
 	end
 
 	if options.quit_after_inactivity > 0 then
@@ -289,9 +294,15 @@ local function thumb(time, r_x, r_y, script)
 		activity_timer:resume()
 	end
 
-	if time == state.last_seek_time then return end
+	if time == state.last_seek_time then
+		if not was_showing then draw(state.real_w, state.real_h, script) end
+		return
+	end
 	-- 时间差极小时跳过重新seek，避免关键帧seek导致缩略图跳变
-	if state.last_seek_time and math.abs(time - state.last_seek_time) < 0.05 then return end
+	if state.last_seek_time and math.abs(time - state.last_seek_time) < 0.05 then
+		if not was_showing then draw(state.real_w, state.real_h, script) end
+		return
+	end
 	state.last_seek_time = time
 	if not state.spawned then process.spawn(time) end
 	process.request_seek()
