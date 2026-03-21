@@ -77,6 +77,7 @@ local prop_tmp = ""
 
 local osm = mp.create_osd_overlay("ass-events")
 local osm_showing = false
+local osm_timer = nil
 local style_generic = "{\\rDefault\\fnConsolas\\fs20\\blur1\\bord2\\1c&HFFFFFF\\3c&H000000}"
 
 local marked_aid_A = nil
@@ -86,6 +87,7 @@ local merged_aid = false
 
 local ostime_msg = mp.create_osd_overlay("ass-events")
 local ostime_showing = false
+local ostime_timer = nil
 local ostime_style = "{\\rDefault\\fnmpv-osd-symbols\\fs30\\bord2\\an9\\alpha&H80\\1c&H01DBF1\\3c&H000000}"
 
 local osd_hack = mp.create_osd_overlay("ass-events")
@@ -211,7 +213,6 @@ function chapter_seek_force(step, nat, uosc)
 					return
 				else
 					local chapter_act2 = mp.get_property_number("chapters", 0) - 1
-					print(chapter_act2)
 					if chapter_act2 <= 0 then
 						return
 					else
@@ -373,7 +374,7 @@ function info_get()
 	local osd_dims = mp.get_property_native("osd-dimensions")
 	local w_s, h_s = osd_dims["w"] - osd_dims["ml"] - osd_dims["mr"], osd_dims["h"] - osd_dims["mt"] - osd_dims["mb"]
 	local cur_name = mp.get_property_osd("media-title") or mp.get_property_osd("filename")
-	local vid_params = mp.get_property_native("video-params") or "..."
+	local vid_params = mp.get_property_native("video-params") or {}
 	local w_raw, h_raw, pix_fmt, color_lv = vid_params["w"] or 0, vid_params["h"] or 0, vid_params["hw-pixelformat"] or vid_params["pixelformat"] or "...", vid_params["colorlevels"] or "..."
 	local fps_o, fps_t = string.format("%0.3f", mp.get_property_number("container-fps", 0)), string.format("%0.3f", mp.get_property_number("estimated-vf-fps", 0))
 	local bitrateV, bitrateA = mp.get_property_number("video-bitrate", 0) / 1000, mp.get_property_number("audio-bitrate", 0) / 1000
@@ -437,7 +438,7 @@ function mark_aid_check()
 	if marked_aid_A ~= nil or marked_aid_B ~= nil then
 		mark_aid_reset()
 	end
-	mp.msg.info("mark_aid_check 重置并轨和标记", 1)
+	mp.msg.info("mark_aid_check 重置并轨和标记")
 end
 function mark_aid_A()
 	marked_aid_A = mp.get_property_number("aid", 0)
@@ -609,7 +610,7 @@ function pip_dummy(pct)
 	if scale_target == 0 then
 		return
 	end
-	window_mini(1, 2)
+	window_mini(true, true)
 	mp.msg.info("pip_dummy 已尝试应用")
 end
 
@@ -667,17 +668,16 @@ function playlist_order(mode, re)
 end
 function playlist_random()
 	local range = mp.get_property_number("playlist-count", 0)
-	local pos = mp.get_property_number("playlist-pos-1", 0)
-	local pos_nxt = math.random(1, range)
-	if range <=2 then
+	if range <= 2 then
 		mp.msg.info("playlist_random 播放列表的条目数量未超过2")
 		return
-	else
-		while pos_nxt == pos do
-			pos_nxt = math.random(1, range)
-		end
-		mp.commandv("set", "playlist-pos-1", pos_nxt)
 	end
+	local pos = mp.get_property_number("playlist-pos-1", 0)
+	local pos_nxt = math.random(1, range)
+	while pos_nxt == pos do
+		pos_nxt = math.random(1, range)
+	end
+	mp.commandv("set", "playlist-pos-1", pos_nxt)
 end
 function playlist_tmp_save()
 	local item_num = mp.get_property_number("playlist-count", 0)
@@ -686,6 +686,10 @@ function playlist_tmp_save()
 		return
 	end
 	local file, err = io.open(save_path, "w")
+	if not file then
+		mp.osd_message("[input_plus] " .. "播放列表保存失败: " .. (err or ""), 1)
+		return
+	end
 	file:write("#EXTM3U\n\n")
 	local Nn = 0
 	while Nn < item_num do
@@ -829,13 +833,13 @@ function speed_adaptive()
 		return
 	end
 	for i = 1, spd_iters_max do
-		local spd_target = speed_scale(fps_dp / fps_raw, i)
-		if spd_target then
-			if math.abs(spd_target - spd_cur) < 0.0001 then
+		local spd_result = speed_scale(fps_dp / fps_raw, i)
+		if spd_result then
+			if math.abs(spd_result - spd_cur) < 0.0001 then
 				break
 			else
-				mp.set_property("speed", spd_target)
-				mp.msg.info("speed_sync_toggle 设定当前速度为" .. spd_target)
+				mp.set_property("speed", spd_result)
+				mp.msg.info("speed_sync_toggle 设定当前速度为" .. spd_result)
 				break
 			end
 		end
@@ -961,7 +965,7 @@ function update_shader_param(prefix, shader, param, val, def, min, max)
 		end
 		min = tonumber(min) or -10000
 		max = tonumber(max) or 10000
-		val_nxt = val_cur + val
+		local val_nxt = val_cur + val
 		if val_nxt > max then
 			val_nxt = max
 		elseif val_nxt < min then
