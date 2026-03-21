@@ -80,6 +80,21 @@ local osm_showing = false
 local osm_timer = nil
 local style_generic = "{\\rDefault\\fnConsolas\\fs20\\blur1\\bord2\\1c&HFFFFFF\\3c&H000000}"
 
+local oskn_active = false
+local oskn_overlay = mp.create_osd_overlay("ass-events")
+oskn_overlay.res_x = 1280
+oskn_overlay.res_y = 720
+local oskn_hide_timer = nil
+local oskn_section = "show-keyname"
+local oskn_ignore_keys = { CLOSE_WIN = true, MOUSE_ENTER = true, MOUSE_LEAVE = true, MOUSE_MOVE = true }
+local oskn_nav_keys = { UP = true, DOWN = true, LEFT = true, RIGHT = true,
+	HOME = true, END = true, PGUP = true, PGDWN = true}
+local oskn_special_keys = { ESC = true, TAB = true, ENTER = true, BS = true,
+	DEL = true, INS = true, SPACE = true, PRINT = true, IDEOGRAPHIC_SPACE = true }
+local oskn_combo_color = "&H9E4A00&" -- 修饰符前缀：深蓝
+local oskn_hint = ""
+local oskn_replay_cmds = { down = "keydown", up = "keyup", press = "keypress", ["repeat"] = "keypress" }
+
 local marked_aid_A = nil
 local marked_aid_B = nil
 local mark_aid_reg = false
@@ -121,6 +136,14 @@ local show_page = 0
 --
 -- 函数设定
 --
+
+function ass_escape(s)
+	s = s:gsub("\\", "\\\\")
+	s = s:gsub("{", "\\{")
+	s = s:gsub("}", "\\}")
+	return s
+end
+
 
 function adevicelist_pre(start)
 	mp.set_property("audio-device", adevicelist[start].name)
@@ -421,6 +444,180 @@ function info_toggle()
 			osm:update()
 		end
 	end)
+end
+
+
+function oskn_get_color(name)
+	if name:match("^F%d+$") then return "&H7A2E80&" end      -- 功能键：紫色
+	if name:match("^KP") then return "&H7A2E80&" end         -- 小键盘：紫色
+	if oskn_nav_keys[name] then return "&H2E8B00&" end       -- 导航键：深绿
+	if name:match("^MBTN") or name:match("^MOUSE_BTN")
+		or name:match("^WHEEL_") or name:match("^AXIS_") then
+		return "&H998800&"                                   -- 鼠标：深青
+	end
+	if name:match("^GAMEPAD_") then return "&H2E6B8B&" end   -- 手柄：深黄
+	if name:match("^TABLET_") then return "&H2E6B8B&" end    -- 数位板：深黄
+	if name:match("^XF86_") then return "&H6B238E&" end      -- 多媒体（废弃）：深紫
+	if oskn_special_keys[name] then return "&H0048B8&" end   -- 特殊键：深橙
+	-- 多媒体/遥控器键（全大写且无下划线前缀已被上方匹配）
+	if name:match("^%u[%u_]+$") and #name > 2 and name ~= "SHARP" then
+		return "&H6B238E&"                                   -- 多媒体键：深紫
+	end
+	return "&H333333&"                                       -- 常规字符：深灰
+end
+function oskn_rounded_rect(w, h, r)
+	local c = 0.5519 * r
+	return table.concat({
+		string.format("m %d 0", r),
+		string.format("l %d 0", w - r),
+		string.format("b %d 0 %d %d %d %d", w - r + c, w, r - c, w, r),
+		string.format("l %d %d", w, h - r),
+		string.format("b %d %d %d %d %d %d", w, h - r + c, w - r + c, h, w - r, h),
+		string.format("l %d %d", r, h),
+		string.format("b %d %d 0 %d 0 %d", r - c, h, h - r + c, h - r),
+		string.format("l 0 %d", r),
+		string.format("b 0 %d %d 0 %d 0", r - c, r - c, r),
+	}, " ")
+end
+-- 拆分组合键的修饰符前缀和基础键
+function oskn_split_combo(name)
+	local mods, base = name:match("^(.*%+)([^+]+)$")
+	if mods and (mods:find("Ctrl%+") or mods:find("Alt%+")
+		or mods:find("Shift%+") or mods:find("Meta%+")) then
+		return mods, base
+	end
+	return nil, name
+end
+function oskn_find_toggle_keys()
+	local keys = {}
+	local seen = {}
+	local bindings = mp.get_property_native("input-bindings", {})
+	for _, b in ipairs(bindings) do
+		if b.cmd and b.cmd:find("toggle%-key%-display") and not seen[b.key] then
+			seen[b.key] = true
+			keys[#keys + 1] = b.key
+		end
+	end
+	return keys
+end
+function oskn_show(name)
+	if oskn_hide_timer then
+		oskn_hide_timer:kill()
+	end
+
+	local mods, base = oskn_split_combo(name)
+	local base_color = oskn_get_color(base)
+
+	local escaped_text
+	if mods then
+		escaped_text = "{\\1c" .. oskn_combo_color .. "}" .. ass_escape(mods) .. "{\\1c" .. base_color .. "}" .. ass_escape(base)
+	else
+		escaped_text = "{\\1c" .. base_color .. "}" .. ass_escape(name)
+	end
+
+	local fs = 64
+	local char_count = #name
+	local text_w = math.max(char_count * fs * 0.55, fs)
+	local pad_x, pad_y = 36, 18
+	local w = text_w + pad_x * 2
+	local h = fs + pad_y * 2
+	local r = 16
+
+	local cx, cy = oskn_overlay.res_x / 2, oskn_overlay.res_y / 2
+
+	local bg = string.format(
+		"{\\rDefault\\an5\\pos(%d,%d)\\p1\\1c&HE8E8E8&\\1a&H18&\\bord0\\shad0}%s",
+		cx, cy, oskn_rounded_rect(w, h, r)
+	)
+	local txt = string.format(
+		"{\\rDefault\\an5\\pos(%d,%d)\\fs%d\\b1\\bord0\\shad0}%s",
+		cx, cy, fs, escaped_text
+	)
+
+	oskn_overlay.data = oskn_hint .. "\n" .. bg .. "\n" .. txt
+	oskn_overlay:update()
+
+	oskn_hide_timer = mp.add_timeout(2, function()
+		oskn_overlay.data = oskn_hint
+		oskn_overlay:update()
+		oskn_hide_timer = nil
+	end)
+end
+function oskn_deactivate()
+	mp.input_disable_section(oskn_section)
+	mp.input_define_section(oskn_section, "")
+	mp.remove_key_binding("oskn-handler")
+
+	if oskn_hide_timer then
+		oskn_hide_timer:kill()
+		oskn_hide_timer = nil
+	end
+	oskn_overlay:remove()
+end
+function oskn_on_key(info)
+	local name = info.key_name or info.key_text or "?"
+
+	-- ESC 作为回退备用按键
+	if name == "ESC" and (info.event == "down" or info.event == "press") then
+		oskn_active = false
+		oskn_deactivate()
+		return
+	end
+
+	-- 黑名单按键：不显示且到达原有绑定
+	if oskn_ignore_keys[name] then
+		local cmd = oskn_replay_cmds[info.event]
+		if cmd and name then
+			mp.input_disable_section(oskn_section)
+			mp.commandv(cmd, name)
+			mp.add_timeout(0, function()
+				if oskn_active then
+					mp.input_enable_section(oskn_section, "exclusive")
+				end
+			end)
+		end
+		return
+	end
+
+	if (info.event == "down" or info.event == "press") then
+		oskn_show(name)
+	end
+end
+function oskn_build_section()
+	local sn = mp.get_script_name()
+	local toggle_keys = oskn_find_toggle_keys()
+	local lines = {
+		"any_unicode script-binding " .. sn .. "/oskn-handler",
+		"unmapped script-binding " .. sn .. "/oskn-handler",
+	}
+	for _, key in ipairs(toggle_keys) do
+		table.insert(lines, key .. " script-binding " .. sn .. "/toggle-key-display")
+	end
+	return table.concat(lines, "\n")
+end
+function oskn_activate()
+	mp.add_key_binding(nil, "oskn-handler", oskn_on_key,
+		{complex = true, repeatable = true})
+
+	mp.input_define_section(oskn_section, oskn_build_section(), "force")
+	mp.input_enable_section(oskn_section, "exclusive")
+
+	local toggle_keys = oskn_find_toggle_keys()
+	local exit_text = "ESC"
+	if #toggle_keys > 0 then
+		exit_text = table.concat(toggle_keys, " / ") .. " / ESC"
+	end
+	oskn_hint = "{\\rDefault\\an1\\fs58\\blur1\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&}按键测试模式 (" .. exit_text .. " 退出)"
+	oskn_overlay.data = oskn_hint
+	oskn_overlay:update()
+end
+function oskn_toggle()
+	oskn_active = not oskn_active
+	if oskn_active then
+		oskn_activate()
+	else
+		oskn_deactivate()
+	end
 end
 
 
@@ -1080,6 +1277,8 @@ mp.add_key_binding(nil, "import_append_aid", import_append_aid)
 mp.add_key_binding(nil, "import_append_sid", import_append_sid)
 
 mp.add_key_binding(nil, "info_toggle", info_toggle)
+
+mp.add_key_binding(nil, "input_test_toggle", oskn_toggle)
 
 mp.add_key_binding(nil, "mark_aid_A", mark_aid_A)
 mp.add_key_binding(nil, "mark_aid_B", mark_aid_B)
