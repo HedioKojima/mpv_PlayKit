@@ -235,7 +235,6 @@ local function clear()
 		end
 		activity_timer:resume()
 	end
-	state.last_seek_time = nil
 	state.show_thumbnail = false
 	state.last_x = nil
 	state.last_y = nil

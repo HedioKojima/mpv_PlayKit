@@ -161,9 +161,10 @@ function Timeline:on_options()
 end
 function Timeline:handle_cursor_up()
 	if self.pressed then
+		local dominated = self.pressed.distance >= 5
 		mp.set_property_native('pause', self.pressed.pause)
 		self.pressed = false
-		if options.thumbnail_mode == 'natural' and self.proximity_raw <= 0 then
+		if options.thumbnail_mode == 'natural' and self.proximity_raw <= 0 and dominated then
 			self.thumb_idle_timer:kill()
 			self.thumb_idle_timer:resume()
 		end
@@ -488,17 +489,20 @@ function Timeline:render()
 			and thumbnail.width ~= 0
 			and thumbnail.height ~= 0
 		if show_thumb and options.thumbnail_mode == 'natural' then
-			if self.pressed then
+			if self.pressed and self.pressed.distance >= 5 then
 				show_thumb = false
 				self.thumb_idle_timer:kill()
 				self.thumb_request_ready = false
-			elseif cursor_x ~= self.last_thumb_cursor_x then
+			elseif not self.pressed and cursor_x ~= self.last_thumb_cursor_x then
 				self.last_thumb_cursor_x = cursor_x
 				self.thumb_request_ready = false
 				self.thumb_idle_timer:kill()
 				self.thumb_idle_timer:resume()
 				show_thumb = false
 			else
+				if self.pressed then
+					self.last_thumb_cursor_x = cursor_x
+				end
 				show_thumb = self.thumb_request_ready
 			end
 		elseif show_thumb and options.thumbnail_mode == 'continuous' then
