@@ -20,11 +20,14 @@ mp.utils = require "mp.utils"
 local helper  = require "helper"
 local winapi  = require "winapi"
 local process = require "process"
+local batch   = require "batch"
 
 local options = {
 
 	load = true,
 
+
+	-- 单帧模式
 	backend = "mpv",
 	binpath = "default",
 	socket = "",
@@ -50,6 +53,17 @@ local options = {
 	cache_iframe = "auto",
 	cache_max = 128,
 	be_workers = 3,
+
+	-- 批量模式
+	bat_backend = "ffmpeg",
+	bat_binpath = "default",
+	bat_path = "",
+	bat_overlay_ids = "43,44,45,46,47,48,49,50,51",
+	bat_width = 320,
+	bat_height = 320,
+	bat_hwdec = "yes",
+	bat_threads = 2,
+	bat_be_workers = 3,
 
 }
 mp.options.read_options(options)
@@ -151,9 +165,24 @@ local state = {
 process.init(state, options, os_name, winapi)
 process.init_seek()
 
+-- 初始化 batch 模块
+batch.init(options, os_name)
+
+
 -- =============================================================================
 -- 显示 广播
 -- =============================================================================
+
+-- 批量模式配置独立广播
+local function bat_info()
+	local json = mp.utils.format_json({
+		bat_width = options.bat_width,
+		bat_height = options.bat_height,
+		bat_overlay_ids = options.bat_overlay_ids,
+		bat_path = options.bat_path,
+	})
+	mp.command_native_async({"script-message", "thumb_engine-bat-info", json}, function() end)
+end
 
 state.remove_thumbnail_files = function() helper.remove_thumbnail_files(state, options) end
 
@@ -180,7 +209,10 @@ local function info(w, h)
 		state.info_timer = mp.add_timeout(0.05, function() info(w, h) end)
 	end
 
-	local json, err = mp.utils.format_json({width=w, height=h, disabled=state.disabled, available=true, socket=options.socket, tnpath=options.tnpath, overlay_id=options.overlay_id})
+	local json, err = mp.utils.format_json({
+		width=w, height=h, disabled=state.disabled, available=true,
+		socket=options.socket, tnpath=options.tnpath, overlay_id=options.overlay_id,
+	})
 	mp.command_native_async({"script-message", "thumb_engine-info", json}, function() end)
 end
 
@@ -393,8 +425,11 @@ local function sync_changes(prop, val)
 	state.dirty = true
 end
 
-local function file_load()
+local function file_load(skip_batch_cancel)
 	clear()
+	if not skip_batch_cancel then
+		batch.batch_cancel()
+	end
 	state.spawned = false
 	state.real_w, state.real_h = nil, nil
 	state.last_real_w, state.last_real_h = nil, nil
@@ -420,6 +455,7 @@ local function file_load()
 end
 
 local function shutdown()
+	batch.batch_cancel()
 	process.run("quit")
 	helper.remove_thumbnail_files(state, options)
 	if options.backend == "mpv" and os_name ~= "windows" then
@@ -453,14 +489,19 @@ mp.register_script_message("clear", clear)
 mp.register_script_message("thumbnail_gen", thumb)
 mp.register_script_message("thumbnail_clr", clear)
 
-mp.register_event("file-loaded", file_load)
+mp.register_event("file-loaded", function() file_load() end)
 mp.register_event("shutdown", shutdown)
+
+-- 广播批量配置
+mp.register_event("file-loaded", function() bat_info() end)
+-- 响应外部主动查询
+mp.register_script_message("thumb_engine-bat-info?", function() bat_info() end)
 
 mp.add_key_binding(nil, "thumb_rerun", function()
 	clear()
 	shutdown()
 	state.auto_run = true
-	file_load()
+	file_load(true)
 	mp.osd_message("缩略图功能已重启", 2)
 	mp.msg.info("缩略图功能已重启")
 end)
@@ -469,12 +510,12 @@ mp.add_key_binding(nil, "thumb_toggle", function()
 		state.auto_run = false
 		clear()
 		shutdown()
-		file_load()
+		file_load(true)
 		mp.osd_message("缩略图功能已临时禁用", 2)
 		mp.msg.info("缩略图功能已临时禁用")
 	else
 		state.auto_run = true
-		file_load()
+		file_load(true)
 		mp.osd_message("缩略图功能已临时启用", 2)
 		mp.msg.info("缩略图功能已临时启用")
 	end
@@ -494,7 +535,21 @@ mp.register_script_message("thumbnail_hwdec", function(hwdec_api)
 	mp.msg.info("缩略图已变更首选解码API：" .. hwdec_api)
 	clear()
 	shutdown()
-	file_load()
+	file_load(true)
+end)
+
+-- 批量帧提取消息
+mp.register_script_message("batch_gen", function(json_str)
+	local params = mp.utils.parse_json(json_str)
+	if params then
+		batch.batch_extract(params)
+	end
+end)
+mp.register_script_message("batch_pause", function()
+	batch.batch_pause()
+end)
+mp.register_script_message("batch_clr", function(rmdir)
+	batch.batch_cancel(rmdir == "rmdir")
 end)
 
 mp.register_idle(watch_changes)

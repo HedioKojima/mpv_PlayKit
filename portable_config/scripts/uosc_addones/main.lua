@@ -5,10 +5,15 @@
 uosc 扩展脚本群组，需要安装脚本 uosc 作为前置依赖。
     子模块:
         menu_shader 用户着色器扩展菜单 - 简化与增强复数项的着色器的调用体验
+        element_vcs 网格缩略图扩展菜单 - 预览与跳转
 
 可用的快捷键示例（在 input.conf 中写入）：
  <KEY>   script-message uosc-menu-shader        # 打开着色器扩展菜单
  <KEY>   script-message uosc-menu-shader root   # 始终从根目录打开
+
+ <KEY>   script-message uosc-element-vcs toggle   # 开关VCS视图
+ <KEY>   script-message uosc-element-vcs enable
+ <KEY>   script-message uosc-element-vcs disable
 
 ]]
 
@@ -26,6 +31,10 @@ opts = {
 	shader_action_prefer = "set",
 	shader_preset_save   = "session",
 	shader_cache_dir     = "~~/",
+
+	-- sub: vcs
+	vcs_padding          = 30,
+	vcs_chapter_mode     = false,
 
 }
 options.read_options(opts, nil)
@@ -128,10 +137,15 @@ end
 -- ============================================================================
 
 require("menu_shader")
+require("element_vcs")
 
 init = function()
 	-- sub: menu_shader
 	shader_menu_init()
 	mp.register_script_message("shader-menu-event", handle_shader_menu_event)
 	mp.register_script_message("uosc-menu-shader", handle_uosc_menu_shader)
+
+	-- sub: vcs
+	vcs_init()
+	mp.register_script_message("uosc-element-vcs", handle_uosc_element_vcs)
 end
