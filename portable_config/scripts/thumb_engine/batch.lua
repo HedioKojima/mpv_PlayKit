@@ -130,10 +130,13 @@ local function build_ffmpeg_args(seek_time, width, height, output_path, use_keyf
 		table.insert(args, "-noaccurate_seek")
 	end
 
+	local input_path = mp.get_property("path")
+	if not input_path or input_path == "" then return nil end
+
 	table.insert(args, "-ss")
 	table.insert(args, tostring(seek_time))
 	table.insert(args, "-i")
-	table.insert(args, mp.get_property("path"))
+	table.insert(args, input_path)
 
 	local append = {
 		"-threads", tostring(options.bat_threads),
@@ -282,6 +285,12 @@ batch_worker = function()
 	local output_path = mp.utils.join_path(batch_params._output_dir, "bat_" .. index .. ".bgra")
 
 	local cmd_args = build_ffmpeg_args(time, batch_params.width, batch_params.height, output_path, batch_params.use_keyframe)
+	if not cmd_args then
+		batch_failed = batch_failed + 1
+		mp.msg.warn("batch frame " .. index .. ": no video path available")
+		batch_worker()
+		return
+	end
 	local command = build_command(cmd_args)
 
 	local id

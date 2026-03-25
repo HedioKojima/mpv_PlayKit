@@ -36,7 +36,7 @@ local options = {
 	max_height = 320,
 	max_width = 320,
 	rescale = 0,
-	overlay_id = 42,
+	overlay_id = 10,
 
 	spawn_first = false,
 	quit_after_inactivity = 0,
@@ -58,12 +58,13 @@ local options = {
 	bat_backend = "ffmpeg",
 	bat_binpath = "default",
 	bat_path = "",
-	bat_overlay_ids = "43,44,45,46,47,48,49,50,51",
+	bat_overlay_ids = "11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35",
 	bat_width = 320,
 	bat_height = 320,
 	bat_hwdec = "yes",
 	bat_threads = 2,
 	bat_be_workers = 3,
+	bat_min_duration = 20,
 
 }
 mp.options.read_options(options)
@@ -455,7 +456,7 @@ local function file_load(skip_batch_cancel)
 end
 
 local function shutdown()
-	batch.batch_cancel()
+	batch.batch_cancel(true)
 	process.run("quit")
 	helper.remove_thumbnail_files(state, options)
 	if options.backend == "mpv" and os_name ~= "windows" then
@@ -541,9 +542,15 @@ end)
 -- 批量帧提取消息
 mp.register_script_message("batch_gen", function(json_str)
 	local params = mp.utils.parse_json(json_str)
-	if params then
-		batch.batch_extract(params)
+	if not params then return end
+	if options.bat_min_duration > 0 then
+		local duration = mp.get_property_number("duration", 0)
+		if duration <= options.bat_min_duration then
+			mp.msg.verbose("batch_gen: skipped, duration " .. duration .. "s <= bat_min_duration " .. options.bat_min_duration .. "s")
+			return
+		end
 	end
+	batch.batch_extract(params)
 end)
 mp.register_script_message("batch_pause", function()
 	batch.batch_pause()

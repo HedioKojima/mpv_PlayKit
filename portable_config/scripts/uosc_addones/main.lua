@@ -34,6 +34,7 @@ opts = {
 
 	-- sub: vcs
 	vcs_padding          = 30,
+	vcs_tiles            = 12,
 	vcs_chapter_mode     = false,
 
 }

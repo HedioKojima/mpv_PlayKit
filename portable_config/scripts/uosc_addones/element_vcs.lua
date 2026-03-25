@@ -70,8 +70,8 @@ end
 -- 时间码计算
 -- =============================================================================
 
-local function calc_time_points(duration, chapter_list, chapter_mode)
-	local max_count = 9
+local function calc_time_points(duration, chapter_list, chapter_mode, max_count)
+	max_count = max_count or 9
 
 	-- 章节模式
 	if chapter_mode and chapter_list and #chapter_list > 0 then
@@ -84,11 +84,16 @@ local function calc_time_points(duration, chapter_list, chapter_mode)
 
 	-- 均分模式
 	local t = {}
+	local prev = -1
 	for i = 1, max_count do
 		local time = duration * i / (max_count + 1)
 		if time < 0.5 then time = 0.5 end
 		if time > duration - 0.5 then time = duration - 0.5 end
-		t[i] = time
+		-- 极短视频：跳过与前一个重复的时间点
+		if math.abs(time - prev) >= 0.1 then
+			t[#t + 1] = time
+			prev = time
+		end
 	end
 	return t
 end
@@ -101,10 +106,17 @@ end
 local LINE_HEIGHT_FACTOR = 1.4
 
 -- 统一布局计算：预留区从 OSD 高度固定比例分配，不与缩略图互相影响
+local function calc_cols(count)
+	if count <= 4 then return 2
+	elseif count <= 9 then return 3
+	elseif count <= 16 then return 4
+	else return 5 end
+end
+
 local function calc_layout(osd_w, osd_h, video_w, video_h, count, padding, cfg_w, cfg_h)
 	cfg_w = cfg_w or 0
 	cfg_h = cfg_h or 0
-	local cols = 3
+	local cols = calc_cols(count)
 	local rows = math.ceil(count / cols)
 
 	-- 预留区：OSD 高度的固定比例
@@ -481,7 +493,7 @@ local function vcs_open()
 	end
 
 	local vp = mp.get_property_native("video-params")
-	if not vp or not vp.w or not vp.h then
+	if not vp or not vp.w or not vp.h or vp.w <= 0 or vp.h <= 0 then
 		-- mp.osd_message("VCS: 无视频轨", 2)
 		return
 	end
@@ -521,10 +533,17 @@ local function vcs_open()
 		vcs_active = false
 		return
 	end
+	if max_slots > 25 then max_slots = 25 end
+
+	-- 确定请求数量：vcs_tiles > 0 时使用用户指定值，否则回退到 overlay_ids 项数
+	local tiles = math.floor(opts.vcs_tiles or 0)
+	if tiles < 0 then tiles = 0 end
+	if tiles > 25 then tiles = 25 end
+	local req_count = tiles > 0 and math.min(tiles, max_slots) or max_slots
 
 	-- 计算时间码
 	local chapter_list = mp.get_property_native("chapter-list", {})
-	times = calc_time_points(duration, chapter_list, opts.vcs_chapter_mode)
+	times = calc_time_points(duration, chapter_list, opts.vcs_chapter_mode, req_count)
 	frame_count = #times
 
 	-- 限制帧数不超过 overlay_ids 数量
@@ -537,7 +556,14 @@ local function vcs_open()
 
 	-- 计算布局（缩略图尺寸、字号、预留区、网格位置一次完成）
 	local padding = opts.vcs_padding
-	grid = calc_layout(osd_w, osd_h, vp.w, vp.h, frame_count, padding)
+	-- 处理旋转元数据（90°/270° 时宽高互换）
+	local vid_w, vid_h = vp.w, vp.h
+	local rotate = mp.get_property_number("video-params/rotate", 0)
+	if rotate % 180 == 90 then
+		vid_w, vid_h = vid_h, vid_w
+	end
+
+	grid = calc_layout(osd_w, osd_h, vid_w, vid_h, frame_count, padding)
 	local thumb_w, thumb_h = grid.thumb_w, grid.thumb_h
 
 	-- 界面
@@ -586,7 +612,8 @@ end
 local function on_batch_once(json_str)
 	if not vcs_active then return end
 	local data = utils.parse_json(json_str)
-	if not data then return end
+	if not data or type(data.index) ~= "number" then return end
+	if data.index < 0 or data.index >= frame_count then return end
 
 	frame_loaded[data.index] = true
 	render_ass()
@@ -638,8 +665,8 @@ end
 mp.register_script_message("thumb_engine-bat-info", function(json_str)
 	local data = utils.parse_json(json_str)
 	if not data then return end
-	if data.bat_overlay_ids ~= nil then te_vcs.bat_overlay_ids = data.bat_overlay_ids end
-	if data.bat_path        ~= nil then te_vcs.bat_path        = data.bat_path        end
+	if data.bat_overlay_ids  ~= nil then te_vcs.bat_overlay_ids  = data.bat_overlay_ids  end
+	if data.bat_path         ~= nil then te_vcs.bat_path         = data.bat_path         end
 end)
 
 function vcs_init()
