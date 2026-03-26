@@ -84,70 +84,79 @@ end
 -- ffmpeg commands
 -- =============================================================================
 
-local function build_ffmpeg_args(seek_time, width, height, output_path, use_keyframe)
-	local ffmpeg_path = options.bat_binpath == "default" and "ffmpeg" or options.bat_binpath
-
-	local args = {
-		ffmpeg_path,
-		"-loglevel", "quiet",
-		"-analyzeduration", "0",
-		"-probesize", "128000",
-		"-skip_loop_filter", "all",
-		"-skip_idct", "all",
-		"-flags2", "fast",
-	}
-
-	if options.bat_hwdec ~= "no" then
-		table.insert(args, "-hwaccel")
-		if options.bat_hwdec == "yes" or options.bat_hwdec == "auto" then
-			if os_name == "windows" then
-				table.insert(args, "d3d11va")
-			elseif os_name == "darwin" then
-				table.insert(args, "videotoolbox")
-			else
-				table.insert(args, "auto")
-			end
-		else
-			table.insert(args, options.bat_hwdec)
-		end
-	end
-
-	--（复用 process.lua 的 HDR/DV 逻辑）
+-- 多帧单进程 ffmpeg 命令：N 个 -ss/-i 输入 + N 个 -map 输出
+local function build_bat_vf(width, height)
 	local dvp = mp.get_property_number("current-tracks/video/dolby-vision-profile", 0)
 	local hdr = mp.get_property_number("video-params/sig-peak", 1)
 	local scale = "scale=" .. width .. ":" .. height .. ":flags=fast_bilinear"
-	local vf
 
-	if dvp > 0 then
-		vf = scale .. ",libplacebo=colorspace=bt709:color_primaries=bt709:color_trc=bt709:gamut_mode=desaturate:tonemapping=spline"
+	if dvp == 5 then
+		return scale .. ",libplacebo=colorspace=bt709:color_primaries=bt709:color_trc=bt709:gamut_mode=desaturate:tonemapping=spline"
 	elseif hdr > 1 then
-		vf = scale .. ",zscale=t=linear:npl=150,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=4.0,zscale=t=bt709:m=bt709:r=tv"
+		return scale .. ",zscale=t=linear:npl=150,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=4.0,zscale=t=bt709:m=bt709:r=tv"
 	else
-		vf = scale
+		return scale
 	end
+end
 
-	if use_keyframe then
-		table.insert(args, "-noaccurate_seek")
-	end
-
+local function build_ffmpeg_multi_args(tasks, use_keyframe)
+	local ffmpeg_path = options.bat_binpath == "default" and "ffmpeg" or options.bat_binpath
 	local input_path = mp.get_property("path")
 	if not input_path or input_path == "" then return nil end
 
-	table.insert(args, "-ss")
-	table.insert(args, tostring(seek_time))
-	table.insert(args, "-i")
-	table.insert(args, input_path)
+	local args = { ffmpeg_path, "-loglevel", "quiet" }
 
-	local append = {
-		"-threads", tostring(options.bat_threads),
-		"-vframes", "1",
-		"-an", "-sn", "-dn",
-		"-vf", vf,
-		"-pix_fmt", "bgra",
-		"-f", "rawvideo",
-		"-y", output_path,
-	}
-	for _, v in ipairs(append) do table.insert(args, v) end
+	local hwaccel_args = {}
+	if options.bat_hwdec ~= "no" then
+		hwaccel_args[#hwaccel_args + 1] = "-hwaccel"
+		if options.bat_hwdec == "yes" or options.bat_hwdec == "auto" then
+			if os_name == "windows" then
+				hwaccel_args[#hwaccel_args + 1] = "d3d11va"
+			elseif os_name == "darwin" then
+				hwaccel_args[#hwaccel_args + 1] = "videotoolbox"
+			else
+				hwaccel_args[#hwaccel_args + 1] = "auto"
+			end
+		else
+			hwaccel_args[#hwaccel_args + 1] = options.bat_hwdec
+		end
+	end
+
+	-- 输入：每个时间点一组
+	for _, task in ipairs(tasks) do
+		local per_input = {
+			"-analyzeduration", "0",
+			"-probesize", "128000",
+			"-skip_loop_filter", "all",
+			"-skip_idct", "all",
+			"-flags2", "fast",
+		}
+		for _, v in ipairs(per_input) do args[#args + 1] = v end
+		for _, v in ipairs(hwaccel_args) do args[#args + 1] = v end
+		if use_keyframe then
+			args[#args + 1] = "-noaccurate_seek"
+		end
+		args[#args + 1] = "-ss"
+		args[#args + 1] = tostring(task.time)
+		args[#args + 1] = "-i"
+		args[#args + 1] = input_path
+	end
+
+	-- 输出：每个时间点一组
+	for i, task in ipairs(tasks) do
+		local output_path = mp.utils.join_path(batch_params._output_dir, "bat_" .. task.index .. ".bgra")
+		local per_output = {
+			"-map", (i - 1) .. ":v:0",
+			"-threads", tostring(options.bat_threads),
+			"-vframes", "1",
+			"-an", "-sn", "-dn",
+			"-vf", batch_params._vf,
+			"-pix_fmt", "bgra",
+			"-f", "rawvideo",
+			"-y", output_path,
+		}
+		for _, v in ipairs(per_output) do args[#args + 1] = v end
+	end
 
 	return args
 end
@@ -279,19 +288,26 @@ batch_worker = function()
 		return
 	end
 
-	local task = table.remove(batch_queue, 1)
-	local index = task.index
-	local time = task.time
-	local output_path = mp.utils.join_path(batch_params._output_dir, "bat_" .. index .. ".bgra")
+	-- 从队列取出任务：尝试均分剩余到 worker 数，但限制单次最大帧数以实现逐步显示
+	-- libplacebo 滤镜多输入会冲突？强制单帧
+	local max_per_call = batch_params._use_libplacebo and 1 or 2
+	local jobs = math.min(math.ceil(#batch_queue / batch_workers), max_per_call)
+	if jobs < 1 then jobs = 1 end
+	local tasks = {}
+	for _ = 1, math.min(jobs, #batch_queue) do
+		tasks[#tasks + 1] = table.remove(batch_queue, 1)
+	end
 
-	local cmd_args = build_ffmpeg_args(time, batch_params.width, batch_params.height, output_path, batch_params.use_keyframe)
+	local cmd_args = build_ffmpeg_multi_args(tasks, batch_params.use_keyframe)
 	if not cmd_args then
-		batch_failed = batch_failed + 1
-		mp.msg.warn("batch frame " .. index .. ": no video path available")
+		batch_failed = batch_failed + #tasks
+		mp.msg.warn("batch job: no video path available")
 		batch_worker()
 		return
 	end
 	local command = build_command(cmd_args)
+
+	local expected_size = batch_params.width * batch_params.height * 4
 
 	local id
 	id = mp.command_native_async(command, function(success, result)
@@ -302,21 +318,24 @@ batch_worker = function()
 			return
 		end
 
-		if success then
-			batch_completed[index] = true
-			bat_draw(index)
-			if batch_params then
+		-- 检查输出文件
+		for _, task in ipairs(tasks) do
+			local fpath = mp.utils.join_path(batch_params._output_dir, "bat_" .. task.index .. ".bgra")
+			local finfo = mp.utils.file_info(fpath)
+			if finfo and finfo.size == expected_size then
+				batch_completed[task.index] = true
+				bat_draw(task.index)
 				local once_json = mp.utils.format_json({
-					index = index,
-					path = output_path,
+					index = task.index,
+					path = fpath,
 					width = batch_params.width,
 					height = batch_params.height,
 				})
 				mp.commandv("script-message-to", batch_params.requester, "batch_once", once_json)
+			else
+				batch_failed = batch_failed + 1
+				mp.msg.warn("batch frame " .. task.index .. " extraction failed")
 			end
-		else
-			batch_failed = batch_failed + 1
-			mp.msg.warn("batch frame " .. index .. " extraction failed")
 		end
 
 		batch_worker()
@@ -338,6 +357,8 @@ function M.batch_extract(params)
 	batch_active = true
 	params._overlay_ids = ov_ids
 	params._output_dir = bat_dir
+	params._vf = build_bat_vf(params.width, params.height)
+	params._use_libplacebo = params._vf:find("libplacebo") ~= nil
 	batch_params = params
 	batch_completed = {}
 	batch_failed = 0

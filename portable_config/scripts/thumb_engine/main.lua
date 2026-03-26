@@ -62,7 +62,7 @@ local options = {
 	bat_width = 320,
 	bat_height = 320,
 	bat_hwdec = "yes",
-	bat_threads = 2,
+	bat_threads = 1,
 	bat_be_workers = 3,
 	bat_min_duration = 20,
 
