@@ -1,15 +1,21 @@
 --[[
 
-文档_ uosc_addones.conf
+文档_ https://github.com/hooke007/mpv_PlayKit/discussions/669
 
 uosc 扩展脚本群组，需要安装脚本 uosc 作为前置依赖。
-    子模块:
-        menu_shader 用户着色器扩展菜单 - 简化与增强复数项的着色器的调用体验
-        element_vcs 网格缩略图扩展菜单 - 预览与跳转
+  功能性子模块:
+    menu_shader  用户着色器扩展菜单 - 简化与增强复数项的着色器的调用体验
+    menu_subtext 字幕行跳转扩展菜单 - 提取字幕文本并跳转到指定行
+    menu_prop    属性检查器扩展菜单 - 查看与搜索 mpv 属性
+    element_vcs  网格缩略图扩展菜单 - 预览与跳转
 
 可用的快捷键示例（在 input.conf 中写入）：
  <KEY>   script-message uosc-menu-shader        # 打开着色器扩展菜单
  <KEY>   script-message uosc-menu-shader root   # 始终从根目录打开
+
+ <KEY>   script-message uosc-menu-subtext       # 打开字幕行扩展菜单
+
+ <KEY>   script-message uosc-menu-prop          # 打开属性检查扩展菜单
 
  <KEY>   script-message uosc-element-vcs toggle   # 开关VCS视图
  <KEY>   script-message uosc-element-vcs enable
@@ -31,6 +37,13 @@ opts = {
 	shader_action_prefer = "set",
 	shader_preset_save   = "session",
 	shader_cache_dir     = "~~/",
+
+	-- sub: subtext
+	subtext_merge        = false,
+
+	-- sub: prop
+	prop_show_values     = false,
+	prop_action_prefer   = "show",
 
 	-- sub: vcs
 	vcs_padding          = 30,
@@ -70,9 +83,9 @@ function incompat_check(full_str, tar_major, tar_minor, tar_patch)
 	return false
 end
 
--- ============================================================================
+-- =============================================================================
 -- 兼容检查
--- ============================================================================
+-- =============================================================================
 
 -- 原因：首个将gpu-next作为首选vo的版本
 local min_major = 0
@@ -100,44 +113,16 @@ mp.register_script_message("uosc-version", function(version)
 	init()
 end)
 
--- ============================================================================
--- 公共工具
--- ============================================================================
+-- =============================================================================
+-- 加载子模块
+-- =============================================================================
 
 script_name = mp.get_script_name()
 
-function normalize_path(p)
-	if not p then return "" end
-	return p:gsub("\\", "/"):gsub("/+", "/")
-end
-
-function path_key(p)
-	return normalize_path(p):lower()
-end
-
-function get_extension(filename)
-	return filename:match("%.([^%.]+)$")
-end
-
-function strip_extension(filename)
-	return filename:match("^(.+)%.[^%.]+$") or filename
-end
-
-function join(base, child)
-	return utils.join_path(base, child)
-end
-
-function sort_entries(entries)
-	table.sort(entries, function(a, b)
-		return a:lower() < b:lower()
-	end)
-end
-
--- ============================================================================
--- 加载子模块
--- ============================================================================
-
+require("helper")
 require("menu_shader")
+require("menu_subtext")
+require("menu_prop")
 require("element_vcs")
 
 init = function()
@@ -145,6 +130,16 @@ init = function()
 	shader_menu_init()
 	mp.register_script_message("shader-menu-event", handle_shader_menu_event)
 	mp.register_script_message("uosc-menu-shader", handle_uosc_menu_shader)
+
+	-- sub: menu_subtext
+	subtext_menu_init()
+	mp.register_script_message("subtext-menu-event", handle_subtext_menu_event)
+	mp.register_script_message("uosc-menu-subtext", handle_uosc_menu_subtext)
+
+	-- sub: menu_prop
+	prop_menu_init()
+	mp.register_script_message("prop-menu-event", handle_prop_menu_event)
+	mp.register_script_message("uosc-menu-prop", handle_uosc_menu_prop)
 
 	-- sub: vcs
 	vcs_init()
