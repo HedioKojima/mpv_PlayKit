@@ -1,6 +1,6 @@
 --[[
 SOURCE_ https://github.com/mpv-player/mpv/blob/master/player/lua/stats.lua
-COMMIT_ d3ec15bca87536341f121a4f0f97954d00a6cfe5
+COMMIT_ de0f2f943d485ad6623629831e079a1de8be021b
 文档_ stats.conf
 
 mpv.conf的前置条件 --load-stats-overlay=no
@@ -63,12 +63,13 @@ local o = {
     duration = 4,
     redraw_delay = 1,
     ass_formatting = true,
-    persistent_overlay = true,       -- 阻止其它OSD信息覆盖自身（原版默认为否）
+    persistent_overlay = true,        -- 阻止其它OSD信息覆盖自身（原版默认 false）
     filter_params_max_length = 100,
     file_tag_max_length = 128,
     file_tag_max_count = 16,
     show_frame_info = false,
     term_clip = true,
+    track_info_selected_only = false, -- 仅显示选中轨道的信息（原版默认 true）
     debug = false,
 
     -- Graph options and style
@@ -135,7 +136,7 @@ if o.load == false then
 end
 -- 原因：与上游同步
 local min_major = 0
-local min_minor = 40
+local min_minor = 41
 local min_patch = 0
 local mpv_ver_curr = mp.get_property_native("mpv-version", "unknown")
 local function incompat_check(full_str, tar_major, tar_minor, tar_patch)
@@ -759,6 +760,7 @@ local function add_file(s, print_cache, print_tags)
     end
 
     if print_tags then
+        append_property(s, "duration", {prefix="持续时间："})
         local tags = mp.get_property_native("display-tags")
         local tags_displayed = 0
         for _, tag in ipairs(tags) do
@@ -1327,7 +1329,8 @@ local function add_track(c, t, i)
     append(c, t["external-filename"], {prefix="外部文件："})
     append(c, "", {prefix="标记："})
     local flags = {"default", "forced", "dependent", "visual-impaired",
-                   "hearing-impaired", "image", "albumart", "external"}
+                   "hearing-impaired", "original", "commentary", "image",
+                   "albumart", "external"}
     local any = false
     for _, flag in ipairs(flags) do
         if t[flag] then
@@ -1361,6 +1364,7 @@ local function add_track(c, t, i)
     if not t["image"] and t["demux-fps"] then
         append_fps(c, "track-list/" .. i .. "/demux-fps", "")
     end
+    append(c, t["format-name"], {prefix="像素/采样格式："})
     append(c, t["demux-rotation"], {prefix="旋转："})
     if t["demux-par"] then
         local num, den = float2rational(t["demux-par"])
@@ -1404,7 +1408,7 @@ local function track_info()
     table.insert(c, o.nl .. o.nl)
     add_file(c, false, true)
     for i, track in ipairs(mp.get_property_native("track-list")) do
-        if track['selected'] then
+        if track['selected'] or not o.track_info_selected_only then
             add_track(c, track, i - 1)
         end
     end
@@ -1548,7 +1552,7 @@ pages = {
     [o.key_page_2] = { idx = 2, f = vo_stats, desc = "帧计时信息扩展", scroll = true },
     [o.key_page_3] = { idx = 3, f = cache_stats, desc = "缓存统计信息" },
     [o.key_page_4] = { idx = 4, f = keybinding_info, desc = "激活中的按键绑定信息", scroll = true },
-    [o.key_page_5] = { idx = 5, f = track_info, desc = "所选的轨道信息", scroll = true },
+    [o.key_page_5] = { idx = 5, f = track_info, desc = "轨道信息", scroll = true },
     [o.key_page_0] = { idx = 0, f = perf_stats, desc = "内部性能信息", scroll = true },
 }
 
@@ -1658,6 +1662,9 @@ local function unbind_scroll()
     end
 end
 
+local add_page_bindings
+local remove_page_bindings
+
 local function filter_bindings()
     input.get({
         prompt = "Filter bindings:",
@@ -1665,6 +1672,10 @@ local function filter_bindings()
             -- This is necessary to close the console if the oneshot
             -- display_timer expires without typing anything.
             searched_text = ""
+
+            -- Must be re-bound to override the console.lua bindings.
+            remove_page_bindings()
+            bind_scroll()
         end,
         edited = function (text)
             reset_scroll_offsets()
@@ -1678,6 +1689,7 @@ local function filter_bindings()
         closed = function ()
             searched_text = nil
             if display_timer:is_enabled() then
+                add_page_bindings()
                 print_page(curr_page)
                 if display_timer.oneshot then
                     display_timer:kill()
@@ -1685,7 +1697,6 @@ local function filter_bindings()
                 end
             end
         end,
-        dont_bind_up_down = true,
     })
 end
 
@@ -1727,7 +1738,7 @@ local function update_scroll_bindings(k)
 end
 
 -- Add keybindings for every page
-local function add_page_bindings()
+add_page_bindings = function()
     local function a(k)
         return function()
             reset_scroll_offsets()
@@ -1746,7 +1757,7 @@ end
 
 
 -- Remove keybindings for every page
-local function remove_page_bindings()
+remove_page_bindings = function()
     for k, _ in pairs(pages) do
         mp.remove_key_binding("__forced_"..k)
     end
