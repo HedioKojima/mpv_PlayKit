@@ -19,7 +19,7 @@ License inherited from upstream
 //!BIND HOOKED
 //!BIND RAISR_LUT_1
 //!SAVE RAISR_PRE
-//!DESC [Intel_RAISR_x1d5_denoise] (Upscale)
+//!DESC [Intel_RAISR_x1p5_denoise] (Upscale)
 //!WIDTH 1.5 HOOKED.w *
 //!HEIGHT 1.5 HOOKED.h *
 //!WHEN OUTPUT.w HOOKED.w 1.0 * > OUTPUT.h HOOKED.h 1.0 * > *
@@ -138,7 +138,7 @@ vec4 hook() {
 //!HOOK LUMA
 //!BIND RAISR_LUT_2
 //!BIND RAISR_PRE
-//!DESC [Intel_RAISR_x1d5_denoise] (Refinement)
+//!DESC [Intel_RAISR_x1p5_denoise] (Refinement)
 //!WIDTH 1.5 HOOKED.w *
 //!HEIGHT 1.5 HOOKED.h *
 //!COMPONENTS 1

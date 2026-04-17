@@ -18,7 +18,7 @@ License inherited from upstream
 //!HOOK LUMA
 //!BIND HOOKED
 //!BIND RAISR_LUT
-//!DESC [Intel_RAISR_x1d5_highres]
+//!DESC [Intel_RAISR_x1p5_highres]
 //!WIDTH 1.5 HOOKED.w *
 //!HEIGHT 1.5 HOOKED.h *
 //!WHEN OUTPUT.w HOOKED.w 1.0 * > OUTPUT.h HOOKED.h 1.0 * > *
