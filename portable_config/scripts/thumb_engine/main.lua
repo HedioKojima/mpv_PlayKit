@@ -162,6 +162,10 @@ local state = {
 	remove_thumbnail_files = nil,
 }
 
+-- OSC Preview API 状态
+local preview_draw = nil
+local preview_ass = mp.create_osd_overlay("ass-events")
+
 -- 初始化 process 模块
 process.init(state, options, os_name, winapi)
 process.init_seek()
@@ -215,15 +219,35 @@ local function info(w, h)
 		socket=options.socket, tnpath=options.tnpath, overlay_id=options.overlay_id,
 	})
 	mp.command_native_async({"script-message", "thumb_engine-info", json}, function() end)
+
+	-- OSC Preview API: 通知 osc 缩略图引擎是否可用
+	mp.set_property_native("user-data/mpv/thumbnailer/enabled", not state.disabled)
 end
 
 local function draw(w, h, script)
 	if not w or not state.show_thumbnail then return end
 
 	if state.x ~= nil then
+		local cmd_x, cmd_y = state.x, state.y
+		local cmd_w, cmd_h = nil, nil
+		local preview = preview_draw and preview_draw.x and preview_draw.y and preview_draw.w and preview_draw.h
+		if preview then
+			cmd_x, cmd_y = preview_draw.x, preview_draw.y
+			cmd_w, cmd_h = preview_draw.w, preview_draw.h
+		end
 		-- 旧版使用的异步调用可能会导致个别缩略图异常
-		-- mp.command_native_async({name = "overlay-add", id=options.overlay_id, x=state.x, y=state.y, file=options.tnpath..".bgra", offset=0, fmt="bgra", w=w, h=h, stride=(4*w)}, function() end)
-		mp.command_native({name = "overlay-add", id=options.overlay_id, x=state.x, y=state.y, file=options.tnpath..".bgra", offset=0, fmt="bgra", w=w, h=h, stride=(4*w)})
+		-- mp.command_native_async({name = "overlay-add", id=options.overlay_id, x=cmd_x, y=cmd_y, file=options.tnpath..".bgra", offset=0, fmt="bgra", w=w, h=h, stride=(4*w)}, function() end)
+		mp.command_native({name = "overlay-add", id=options.overlay_id, x=cmd_x, y=cmd_y, file=options.tnpath..".bgra", offset=0, fmt="bgra", w=w, h=h, stride=(4*w), dw=cmd_w, dh=cmd_h})
+		if preview then
+			local ass = preview_draw.ass or ""
+			local osd_w, osd_h = mp.get_osd_size()
+			if osd_w > 0 and osd_h > 0 then
+				preview_ass.res_x = osd_w
+				preview_ass.res_y = osd_h
+				preview_ass.data = ass
+				preview_ass:update()
+			end
+		end
 	elseif script then
 		local json, err = mp.utils.format_json({width=w, height=h, x=state.x, y=state.y, socket=options.socket, tnpath=options.tnpath, overlay_id=options.overlay_id})
 		mp.commandv("script-message-to", script, "thumb_engine-render", json)
@@ -259,7 +283,7 @@ file_timer:kill()
 
 local activity_timer
 
-local function clear()
+local function clear(force_overlay_remove)
 	file_timer:kill()
 	process.kill_seek_timer()
 	if options.quit_after_inactivity > 0 then
@@ -271,7 +295,8 @@ local function clear()
 	state.show_thumbnail = false
 	state.last_x = nil
 	state.last_y = nil
-	if state.script_name then return end
+	preview_ass:remove()
+	if state.script_name and not force_overlay_remove then return end
 	mp.command_native_async({name = "overlay-remove", id=options.overlay_id}, function() end)
 end
 
@@ -339,6 +364,22 @@ local function thumb(time, r_x, r_y, script)
 	if not state.spawned then process.spawn(time) end
 	process.request_seek()
 	if not file_timer:is_enabled() then file_timer:resume() end
+end
+
+-- =============================================================================
+-- OSC Preview API
+-- =============================================================================
+
+local function preview_update_draw(name, value)
+	preview_draw = value
+
+	if preview_draw == nil then
+		clear(true)
+		return
+	end
+
+	local hover_sec = mp.get_property_number("user-data/osc/hover-sec")
+	thumb(hover_sec, value.x, value.y, nil)
 end
 
 -- =============================================================================
@@ -427,7 +468,8 @@ local function sync_changes(prop, val)
 end
 
 local function file_load(skip_batch_cancel)
-	clear()
+	preview_draw = nil
+	clear(true)
 	if not skip_batch_cancel then
 		batch.batch_cancel()
 	end
@@ -482,6 +524,9 @@ mp.observe_property("stream-open-filename", "native", update_property)
 mp.observe_property("path", "native", update_property)
 mp.observe_property("vid", "native", sync_changes)
 mp.observe_property("edition", "native", sync_changes)
+
+-- OSC Preview API 的 draw-preview
+mp.observe_property("user-data/osc/draw-preview", "native", preview_update_draw)
 
 -- thumbfast api兼容接口
 mp.register_script_message("thumb", thumb)
