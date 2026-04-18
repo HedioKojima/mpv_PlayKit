@@ -37,6 +37,18 @@ function Menu:open(data, callback, opts)
 		open_menu.is_being_replaced = true
 		open_menu:close(true)
 	end
+	-- 互斥1：关闭已打开的 mpv osd菜单
+	if mp.get_property_native('user-data/mpv/context-menu/open') then
+		for _ = 1, 5 do
+			mp.commandv('script-message-to', 'context_menu', '_context_menu_ESC')
+		end
+		--mp.commandv('script-message-to', 'context_menu', '_context_menu_MBTN_LEFT')
+	end
+	-- 互斥2：关闭已打开的 mpv console/select 菜单（只关闭 select 脚本发起的，不影响打开的控制台）
+	if mp.get_property_native('user-data/mpv/console/open') then
+		mp.commandv('script-message-to', 'console', 'disable',
+			utils.format_json({client_name = 'select'}))
+	end
 	return Menu:new(data, callback, opts)
 end
 
