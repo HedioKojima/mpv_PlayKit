@@ -819,6 +819,16 @@ mp.observe_property('estimated-display-fps', 'native', update_render_delay)
 mp.observe_property('eof-reached', 'native', create_state_setter('eof_reached'))
 mp.observe_property('core-idle', 'native', create_state_setter('core_idle'))
 
+-- 互斥1：mpv osd菜单打开时关闭 uosc 菜单
+-- 非互斥版实现 https://github.com/tomasklaen/uosc/commit/95dd6085643f009e8bdb4976fce32a0afc489511
+mp.observe_property('user-data/mpv/context-menu/open', 'bool', function(_, value)
+	if value == true and Menu:is_open() then Menu:close() end
+end)
+-- 互斥2：console/select 菜单打开时关闭 uosc 菜单
+mp.observe_property('user-data/mpv/console/open', 'bool', function(_, value)
+	if value == true and Menu:is_open() then Menu:close() end
+end)
+
 --[[ KEY BINDS ]]
 
 -- Adds a key binding that respects rerouting set by `key_binding_overwrites` table.
